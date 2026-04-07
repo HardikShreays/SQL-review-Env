@@ -53,11 +53,18 @@ VALID_CATEGORIES = {
     "incorrect_logic", "cartesian_product", "missing_null_check", "none"
 }
 VALID_SEVERITIES = {"critical", "high", "medium", "low"}
+MIN_STRICT_SCORE = 0.0001
+MAX_STRICT_SCORE = 0.9999
 
 
 def emit(marker: str, payload: dict) -> None:
     """Emit strict marker logs for external evaluators."""
     print(f"[{marker}] {json.dumps(payload, separators=(',', ':'))}")
+
+
+def clamp_strict_score(value: float) -> float:
+    """Clamp scores into strict open interval (0, 1)."""
+    return round(min(MAX_STRICT_SCORE, max(MIN_STRICT_SCORE, float(value))), 4)
 
 # ---------------------------------------------------------------------------
 # OpenAI-compatible client
@@ -182,6 +189,7 @@ def run_episode(task_id: str) -> float:
     history = []
     conversation = []
     final_score = 0.0
+    end_emitted = False
 
     for _ in range(obs.get("max_steps", 10)):
         if obs.get("done"):
@@ -254,24 +262,26 @@ def run_episode(task_id: str) -> float:
         history.append(action)
 
         if done:
-            final_score = result["reward"]
+            final_score = clamp_strict_score(result["reward"])
             emit("END", {
                 "task_id": task_id,
                 "steps_taken": len(history),
-                "final_score": round(float(final_score), 4),
+                "final_score": final_score,
                 "elapsed_seconds": round(time.time() - run_started_at, 2),
             })
+            end_emitted = True
             break
 
-    if not obs.get("done"):
+    if not end_emitted:
+        final_score = clamp_strict_score(final_score)
         emit("END", {
             "task_id": task_id,
             "steps_taken": len(history),
-            "final_score": round(float(final_score), 4),
+            "final_score": final_score,
             "elapsed_seconds": round(time.time() - run_started_at, 2),
         })
 
-    return final_score
+    return clamp_strict_score(final_score)
 
 
 # ---------------------------------------------------------------------------
