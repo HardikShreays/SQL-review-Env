@@ -45,7 +45,8 @@ TASKS = [
     "easy_select_star",
 ]
 
-RUNS_PER_TASK = 1  # for variance reporting
+RUNS_PER_TASK = 3  # for variance reporting
+BENCHMARK = "sql_query_review"
 
 # Valid enum values — sanitize LLM output before sending to env
 VALID_CATEGORIES = {
@@ -57,9 +58,25 @@ MIN_STRICT_SCORE = 0.0001
 MAX_STRICT_SCORE = 0.9999
 
 
-def emit(marker: str, payload: dict) -> None:
-    """Emit strict marker logs for external evaluators."""
-    print(f"[{marker}] {json.dumps(payload, separators=(',', ':'))}")
+def log_start(task: str, env: str, model: str) -> None:
+    print(f"[START] task={task} env={env} model={model}", flush=True)
+
+
+def log_step(step: int, action: str, reward: float, done: bool, error: str | None) -> None:
+    error_val = error if error else "null"
+    done_val = str(done).lower()
+    print(
+        f"[STEP] step={step} action={action} reward={reward:.2f} done={done_val} error={error_val}",
+        flush=True,
+    )
+
+
+def log_end(success: bool, steps: int, score: float, rewards: list[float]) -> None:
+    rewards_str = ",".join(f"{r:.2f}" for r in rewards)
+    print(
+        f"[END] success={str(success).lower()} steps={steps} score={score:.2f} rewards={rewards_str}",
+        flush=True,
+    )
 
 
 def hprint(*args, **kwargs) -> None:
@@ -189,12 +206,15 @@ def run_episode(task_id: str) -> float:
     result = env_reset(task_id)
     obs = result["observation"]
     run_started_at = time.time()
-    emit("START", {"task_id": task_id, "max_steps": obs.get("max_steps", 10)})
+    log_start(task=task_id, env=BENCHMARK, model=MODEL_NAME)
 
     history = []
     conversation = []
     final_score = 0.0
     end_emitted = False
+    success = False
+    rewards: list[float] = []
+    steps_taken = 0
 
     for _ in range(obs.get("max_steps", 10)):
         if obs.get("done"):
@@ -242,20 +262,12 @@ def run_episode(task_id: str) -> float:
         if action.get("corrected_sql") is not None and not isinstance(action.get("corrected_sql"), str):
             action["corrected_sql"] = None
 
-        step_number = obs["step_count"] + 1
+        step_number = steps_taken + 1
         hprint(
             f"    step {step_number}: "
             f"{action.get('action_type')} "
             f"[{action.get('issue_category')}]"
         )
-        emit("STEP", {
-            "task_id": task_id,
-            "step": step_number,
-            "action_type": action.get("action_type"),
-            "issue_category": action.get("issue_category"),
-            "severity": action.get("severity"),
-        })
-
         try:
             result = env_step(action)
         except requests.HTTPError as e:
@@ -264,27 +276,26 @@ def run_episode(task_id: str) -> float:
 
         obs = result["observation"]
         done = result["done"]
+        reward = clamp_strict_score(result.get("reward", 0.0))
+        final_score = reward
+        error = obs.get("last_action_error") if isinstance(obs, dict) else None
+        action_str = action.get("action_type", "unknown")
+        log_step(step=step_number, action=action_str, reward=reward, done=done, error=error)
+        rewards.append(reward)
+        steps_taken = step_number
         history.append(action)
 
         if done:
-            final_score = clamp_strict_score(result["reward"])
-            emit("END", {
-                "task_id": task_id,
-                "steps_taken": len(history),
-                "final_score": final_score,
-                "elapsed_seconds": round(time.time() - run_started_at, 2),
-            })
+            final_score = reward
+            success = final_score > 0.0
+            log_end(success=success, steps=steps_taken, score=final_score, rewards=rewards)
             end_emitted = True
             break
 
     if not end_emitted:
         final_score = clamp_strict_score(final_score)
-        emit("END", {
-            "task_id": task_id,
-            "steps_taken": len(history),
-            "final_score": final_score,
-            "elapsed_seconds": round(time.time() - run_started_at, 2),
-        })
+        success = final_score > 0.0
+        log_end(success=success, steps=steps_taken, score=final_score, rewards=rewards)
 
     return clamp_strict_score(final_score)
 
