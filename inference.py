@@ -31,9 +31,11 @@ load_dotenv()
 
 API_BASE_URL = os.environ.get("API_BASE_URL", "https://api.groq.com/openai/v1")
 MODEL_NAME   = os.environ.get("MODEL_NAME", "llama-3.3-70b-versatile")
-# Submission evaluators provide HF_TOKEN; keep API_TOKEN as local fallback.
-API_TOKEN     = os.environ.get("HF_TOKEN") or os.environ.get("API_TOKEN", "")
+HF_TOKEN      = os.environ.get("HF_TOKEN")
 ENV_URL      = os.environ.get("ENV_URL", "https://hardikshreyas-sql-query-review.hf.space")
+
+if not HF_TOKEN:
+    raise RuntimeError("HF_TOKEN is required")
 
 TASKS = [
     "easy_cartesian_product",
@@ -62,7 +64,7 @@ def emit(marker: str, payload: dict) -> None:
 # ---------------------------------------------------------------------------
 
 client = OpenAI(
-    api_key=API_TOKEN or "dummy",
+    api_key=HF_TOKEN,
     base_url=API_BASE_URL,
 )
 
