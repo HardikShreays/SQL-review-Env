@@ -62,6 +62,11 @@ def emit(marker: str, payload: dict) -> None:
     print(f"[{marker}] {json.dumps(payload, separators=(',', ':'))}")
 
 
+def hprint(*args, **kwargs) -> None:
+    """Human-readable logs go to stderr, not stdout."""
+    print(*args, file=sys.stderr, **kwargs)
+
+
 def clamp_strict_score(value: float) -> float:
     """Clamp scores into strict open interval (0, 1)."""
     return round(min(MAX_STRICT_SCORE, max(MIN_STRICT_SCORE, float(value))), 4)
@@ -96,7 +101,7 @@ def env_step(action: dict) -> dict:
         timeout=30,
     )
     if r.status_code != 200:
-        print(f"    ✗ Server response: {r.text[:200]}")  # ← add this
+        hprint(f"    ✗ Server response: {r.text[:200]}")
     r.raise_for_status()
     return r.json()
 
@@ -210,7 +215,7 @@ def run_episode(task_id: str) -> float:
                 response_format={"type": "json_object"},
             )
         except Exception as e:
-            print(f"    ✗ LLM error: {e}")
+            hprint(f"    ✗ LLM error: {e}")
             break
 
         raw = response.choices[0].message.content or "{}"
@@ -219,7 +224,7 @@ def run_episode(task_id: str) -> float:
         try:
             action = json.loads(raw)
         except json.JSONDecodeError as e:
-            print(f"    ✗ JSON parse error: {e}")
+            hprint(f"    ✗ JSON parse error: {e}")
             break
 
         # Sanitize LLM output
@@ -238,7 +243,7 @@ def run_episode(task_id: str) -> float:
             action["corrected_sql"] = None
 
         step_number = obs["step_count"] + 1
-        print(
+        hprint(
             f"    step {step_number}: "
             f"{action.get('action_type')} "
             f"[{action.get('issue_category')}]"
@@ -254,7 +259,7 @@ def run_episode(task_id: str) -> float:
         try:
             result = env_step(action)
         except requests.HTTPError as e:
-            print(f"    ✗ Env error: {e}")
+            hprint(f"    ✗ Env error: {e}")
             break
 
         obs = result["observation"]
@@ -293,26 +298,26 @@ def run_task(task_id: str, runs: int = RUNS_PER_TASK) -> dict:
     Run multiple episodes for one task.
     Returns mean, std, min, max scores.
     """
-    print(f"\n{'='*60}")
-    print(f"Task: {task_id}  ({runs} runs)")
-    print(f"{'='*60}")
+    hprint(f"\n{'='*60}")
+    hprint(f"Task: {task_id}  ({runs} runs)")
+    hprint(f"{'='*60}")
 
     scores = []
     for run_num in range(runs):
-        print(f"\n  Run {run_num + 1}/{runs}:")
+        hprint(f"\n  Run {run_num + 1}/{runs}:")
         score = run_episode(task_id)
         scores.append(score)
-        print(f"  → Score: {score:.4f}")
+        hprint(f"  → Score: {score:.4f}")
 
     mean  = statistics.mean(scores)
     std   = statistics.stdev(scores) if len(scores) > 1 else 0.0
     best  = max(scores)
     worst = min(scores)
 
-    print(f"\n  ── Results for '{task_id}'")
-    print(f"     mean : {mean:.4f}")
-    print(f"     std  : {std:.4f}")
-    print(f"     best : {best:.4f}  worst: {worst:.4f}")
+    hprint(f"\n  ── Results for '{task_id}'")
+    hprint(f"     mean : {mean:.4f}")
+    hprint(f"     std  : {std:.4f}")
+    hprint(f"     best : {best:.4f}  worst: {worst:.4f}")
 
     return {
         "mean": round(mean, 4),
@@ -328,20 +333,20 @@ def run_task(task_id: str, runs: int = RUNS_PER_TASK) -> dict:
 # ---------------------------------------------------------------------------
 
 def main():
-    print("SQL Query Review — OpenEnv Baseline Inference")
-    print(f"Model  : {MODEL_NAME}")
-    print(f"API    : {API_BASE_URL}")
-    print(f"Env    : {ENV_URL}")
-    print(f"Tasks  : {len(TASKS)}")
-    print(f"Runs   : {RUNS_PER_TASK} per task")
-    print()
+    hprint("SQL Query Review — OpenEnv Baseline Inference")
+    hprint(f"Model  : {MODEL_NAME}")
+    hprint(f"API    : {API_BASE_URL}")
+    hprint(f"Env    : {ENV_URL}")
+    hprint(f"Tasks  : {len(TASKS)}")
+    hprint(f"Runs   : {RUNS_PER_TASK} per task")
+    hprint()
 
     if not env_health():
-        print(f"✗ Environment not reachable at {ENV_URL}")
-        print("  Start server: uvicorn server.app:app --host 0.0.0.0 --port 7860")
+        hprint(f"✗ Environment not reachable at {ENV_URL}")
+        hprint("  Start server: uvicorn server.app:app --host 0.0.0.0 --port 7860")
         sys.exit(1)
 
-    print("✓ Environment is healthy\n")
+    hprint("✓ Environment is healthy\n")
 
     all_results = {}
     start = time.time()
@@ -352,24 +357,24 @@ def main():
     elapsed = time.time() - start
 
     # Summary table
-    print(f"\n{'='*60}")
-    print("BASELINE RESULTS")
-    print(f"{'='*60}")
-    print(f"  {'Task':<35} {'Mean':>6}  {'±Std':>6}  {'Best':>6}")
-    print(f"  {'-'*55}")
+    hprint(f"\n{'='*60}")
+    hprint("BASELINE RESULTS")
+    hprint(f"{'='*60}")
+    hprint(f"  {'Task':<35} {'Mean':>6}  {'±Std':>6}  {'Best':>6}")
+    hprint(f"  {'-'*55}")
 
     means = []
     for task_id, r in all_results.items():
         bar = "█" * int(r["mean"] * 20)
-        print(
+        hprint(
             f"  {task_id:<35} {r['mean']:>6.4f}  "
             f"±{r['std']:>5.4f}  {r['best']:>6.4f}  {bar}"
         )
         means.append(r["mean"])
 
     overall_mean = statistics.mean(means)
-    print(f"\n  Overall mean : {overall_mean:.4f}")
-    print(f"  Total time   : {elapsed:.1f}s")
+    hprint(f"\n  Overall mean : {overall_mean:.4f}")
+    hprint(f"  Total time   : {elapsed:.1f}s")
 
     # Machine-readable output for validators
     output = {
@@ -378,8 +383,8 @@ def main():
         "overall_mean": round(overall_mean, 4),
         "elapsed_seconds": round(elapsed, 1),
     }
-    print("\nJSON:")
-    print(json.dumps(output, indent=2))
+    hprint("\nJSON:")
+    hprint(json.dumps(output, indent=2))
 
 
 if __name__ == "__main__":
