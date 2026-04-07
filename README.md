@@ -10,7 +10,7 @@ pinned: false
 
 # SQL Query Review Environment
 
-Last updated: 2026-04-06
+Last updated: 2026-04-07
 
 [![OpenEnv](https://img.shields.io/badge/OpenEnv-compliant-blue)](https://github.com/meta-pytorch/openenv)
 [![Hugging Face Space](https://img.shields.io/badge/HuggingFace-Space-yellow)](https://huggingface.co/spaces/hardikshreyas/sql_query_review)
@@ -52,9 +52,11 @@ uvicorn server.app:app --host 0.0.0.0 --port 7860
 ```bash
 export API_BASE_URL="https://api.groq.com/openai/v1"
 export MODEL_NAME="meta-llama/llama-4-scout-17b-16e-instruct"
-export API_TOKEN="your_groq_key"
+export HF_TOKEN="your_api_key"
 python inference.py
 ```
+
+Expected structured logs include `[START]`, `[STEP]`, and `[END]` markers for evaluator parsing.
 
 ### Docker
 
@@ -155,13 +157,13 @@ Model: `meta-llama/llama-4-scout-17b-16e-instruct` (via Groq), 3 runs per task.
 
 | Task | Mean | Std (±) | Best |
 |---|---:|---:|---:|
-| `easy_cartesian_product` | 0.8667 | 0.1155 | 1.0000 |
-| `medium_sql_injection` | 0.8667 | 0.1155 | 1.0000 |
+| `easy_cartesian_product` | 0.9333 | 0.1155 | 1.0000 |
+| `medium_sql_injection` | 1.0000 | 0.0000 | 1.0000 |
 | `hard_n_plus_one` | 0.9833 | 0.0289 | 1.0000 |
 | `medium_missing_null_check` | 0.7333 | 0.0577 | 0.8000 |
 | `easy_select_star` | 1.0000 | 0.0000 | 1.0000 |
 
-**Overall mean:** `0.8900`
+**Overall mean:** `0.9300`
 
 ## API Example
 
@@ -197,7 +199,7 @@ Content-Type: application/json
 |---|---|---|
 | `API_BASE_URL` | yes | OpenAI-compatible API base URL |
 | `MODEL_NAME` | yes | LLM model identifier |
-| `API_TOKEN` | yes | API key/token |
+| `HF_TOKEN` | yes | API key/token used by evaluators |
 | `ENV_URL` | optional | Environment URL (defaults to HF Space URL) |
 
 ## Project Structure
