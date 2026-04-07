@@ -1,0 +1,7 @@
+spec_version: 1
+name: sql_query_review
+type: space
+runtime: fastapi
+app: server.app:app
+port: 7860
+

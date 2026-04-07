@@ -1,0 +1,374 @@
+"""
+inference.py — Baseline agent for SQL Query Review OpenEnv
+
+Required environment variables:
+    API_BASE_URL   — OpenAI-compatible API base URL
+    MODEL_NAME     — Model identifier
+    HF_TOKEN       — API key
+
+Optional:
+    ENV_URL        — Environment server (default: HF Space URL)
+
+Usage:
+    python inference.py
+"""
+
+import json
+import os
+import sys
+import time
+import statistics
+
+import requests
+from openai import OpenAI
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# ---------------------------------------------------------------------------
+# Config
+# ---------------------------------------------------------------------------
+
+API_BASE_URL = os.environ.get("API_BASE_URL", "https://api.groq.com/openai/v1")
+MODEL_NAME   = os.environ.get("MODEL_NAME", "llama-3.3-70b-versatile")
+# Submission evaluators provide HF_TOKEN; keep API_TOKEN as local fallback.
+API_TOKEN     = os.environ.get("HF_TOKEN") or os.environ.get("API_TOKEN", "")
+ENV_URL      = os.environ.get("ENV_URL", "https://hardikshreyas-sql-query-review.hf.space")
+
+TASKS = [
+    "easy_cartesian_product",
+    "medium_sql_injection",
+    "hard_n_plus_one",
+    "medium_missing_null_check",
+    "easy_select_star",
+]
+
+RUNS_PER_TASK = 1  # for variance reporting
+
+# Valid enum values — sanitize LLM output before sending to env
+VALID_CATEGORIES = {
+    "sql_injection", "missing_index", "n_plus_one",
+    "incorrect_logic", "cartesian_product", "missing_null_check", "none"
+}
+VALID_SEVERITIES = {"critical", "high", "medium", "low"}
+
+
+def emit(marker: str, payload: dict) -> None:
+    """Emit strict marker logs for external evaluators."""
+    print(f"[{marker}] {json.dumps(payload, separators=(',', ':'))}")
+
+# ---------------------------------------------------------------------------
+# OpenAI-compatible client
+# ---------------------------------------------------------------------------
+
+client = OpenAI(
+    api_key=API_TOKEN or "dummy",
+    base_url=API_BASE_URL,
+)
+
+# ---------------------------------------------------------------------------
+# Environment HTTP helpers
+# ---------------------------------------------------------------------------
+
+def env_reset(task_id: str = None) -> dict:
+    r = requests.post(
+        f"{ENV_URL}/reset",
+        json={"task_id": task_id} if task_id else {},
+        timeout=30,
+    )
+    r.raise_for_status()
+    return r.json()
+
+
+def env_step(action: dict) -> dict:
+    r = requests.post(
+        f"{ENV_URL}/step",
+        json={"action": action},
+        timeout=30,
+    )
+    if r.status_code != 200:
+        print(f"    ✗ Server response: {r.text[:200]}")  # ← add this
+    r.raise_for_status()
+    return r.json()
+
+
+def env_health() -> bool:
+    try:
+        r = requests.get(f"{ENV_URL}/health", timeout=10)
+        return r.status_code == 200
+    except Exception:
+        return False
+
+# ---------------------------------------------------------------------------
+# System prompt
+# ---------------------------------------------------------------------------
+
+SYSTEM_PROMPT = """You are an expert senior database engineer doing a SQL code review.
+
+You receive a SQL query, its schema, and the developer's intent.
+
+You MUST respond with a single valid JSON object — no markdown, no extra text.
+
+JSON schema:
+{
+  "action_type": "identify_issue" | "suggest_fix" | "approve" | "reject",
+  "issue_category": "sql_injection" | "missing_index" | "n_plus_one" | "incorrect_logic" | "cartesian_product" | "missing_null_check" | "none",
+  "severity": "critical" | "high" | "medium" | "low" | null,
+  "explanation": "your detailed reasoning here",
+  "corrected_sql": "full corrected SQL string or null"
+}
+
+STRICT STRATEGY — follow this exact order:
+Step 1: Call identify_issue ONCE for the single most critical problem you see.
+Step 2: Call suggest_fix with a complete corrected_sql that fixes ALL issues.
+Step 3: Call reject to close the review.
+
+RULES:
+- Identify ALL issues you find before suggesting a fix (up to 4 identify_issue calls)
+- Always call suggest_fix before reject
+- corrected_sql must be complete working SQL, not pseudocode
+- Never call identify_issue after suggest_fix
+- Never approve a query that has problems
+- issue_category must be one of the exact values listed above
+"""
+
+
+def build_user_message(obs: dict, history: list) -> str:
+    history_str = ""
+    if history:
+        history_str = "\n\nYour actions so far:\n"
+        for i, h in enumerate(history, 1):
+            history_str += (
+                f"  Step {i}: {h['action_type']} "
+                f"[{h.get('issue_category', '')}] — "
+                f"{h.get('explanation', '')[:80]}\n"
+            )
+
+    feedback = obs.get("feedback", "")
+    feedback_str = f"\n\nEnvironment feedback: {feedback}" if feedback else ""
+
+    return f"""## Query Under Review
+
+Developer's intent: {obs['task_description']}
+
+Schema:
+```sql
+{obs['schema_context']}
+```
+
+Submitted query:
+```sql
+{obs['raw_sql']}
+```
+
+Step {obs['step_count']} of {obs['max_steps']}.{feedback_str}{history_str}
+
+Respond with a single JSON action object."""
+
+
+# ---------------------------------------------------------------------------
+# Single episode run
+# ---------------------------------------------------------------------------
+
+def run_episode(task_id: str) -> float:
+    """Run one full episode for a task. Returns final grader score."""
+    result = env_reset(task_id)
+    obs = result["observation"]
+    run_started_at = time.time()
+    emit("START", {"task_id": task_id, "max_steps": obs.get("max_steps", 10)})
+
+    history = []
+    conversation = []
+    final_score = 0.0
+
+    for _ in range(obs.get("max_steps", 10)):
+        if obs.get("done"):
+            break
+
+        user_msg = build_user_message(obs, history)
+        conversation.append({"role": "user", "content": user_msg})
+
+        # LLM call
+        try:
+            response = client.chat.completions.create(
+                model=MODEL_NAME,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT}
+                ] + conversation,
+                temperature=0.2,
+                max_tokens=2048,  # hard task needs room for corrected SQL
+                response_format={"type": "json_object"},
+            )
+        except Exception as e:
+            print(f"    ✗ LLM error: {e}")
+            break
+
+        raw = response.choices[0].message.content or "{}"
+        conversation.append({"role": "assistant", "content": raw})
+
+        try:
+            action = json.loads(raw)
+        except json.JSONDecodeError as e:
+            print(f"    ✗ JSON parse error: {e}")
+            break
+
+        # Sanitize LLM output
+        action.setdefault("issue_category", "none")
+        action.setdefault("severity", None)
+        action.setdefault("corrected_sql", None)
+        action.setdefault("explanation", "No explanation provided.")
+
+        if action.get("issue_category") not in VALID_CATEGORIES:
+            action["issue_category"] = "none"
+        if action.get("severity") not in VALID_SEVERITIES:
+            action["severity"] = None
+        if not action.get("explanation") or len(str(action.get("explanation", ""))) < 5:
+            action["explanation"] = "No explanation provided by agent."
+        if action.get("corrected_sql") is not None and not isinstance(action.get("corrected_sql"), str):
+            action["corrected_sql"] = None
+
+        step_number = obs["step_count"] + 1
+        print(
+            f"    step {step_number}: "
+            f"{action.get('action_type')} "
+            f"[{action.get('issue_category')}]"
+        )
+        emit("STEP", {
+            "task_id": task_id,
+            "step": step_number,
+            "action_type": action.get("action_type"),
+            "issue_category": action.get("issue_category"),
+            "severity": action.get("severity"),
+        })
+
+        try:
+            result = env_step(action)
+        except requests.HTTPError as e:
+            print(f"    ✗ Env error: {e}")
+            break
+
+        obs = result["observation"]
+        done = result["done"]
+        history.append(action)
+
+        if done:
+            final_score = result["reward"]
+            emit("END", {
+                "task_id": task_id,
+                "steps_taken": len(history),
+                "final_score": round(float(final_score), 4),
+                "elapsed_seconds": round(time.time() - run_started_at, 2),
+            })
+            break
+
+    if not obs.get("done"):
+        emit("END", {
+            "task_id": task_id,
+            "steps_taken": len(history),
+            "final_score": round(float(final_score), 4),
+            "elapsed_seconds": round(time.time() - run_started_at, 2),
+        })
+
+    return final_score
+
+
+# ---------------------------------------------------------------------------
+# Task runner with variance reporting
+# ---------------------------------------------------------------------------
+
+def run_task(task_id: str, runs: int = RUNS_PER_TASK) -> dict:
+    """
+    Run multiple episodes for one task.
+    Returns mean, std, min, max scores.
+    """
+    print(f"\n{'='*60}")
+    print(f"Task: {task_id}  ({runs} runs)")
+    print(f"{'='*60}")
+
+    scores = []
+    for run_num in range(runs):
+        print(f"\n  Run {run_num + 1}/{runs}:")
+        score = run_episode(task_id)
+        scores.append(score)
+        print(f"  → Score: {score:.4f}")
+
+    mean  = statistics.mean(scores)
+    std   = statistics.stdev(scores) if len(scores) > 1 else 0.0
+    best  = max(scores)
+    worst = min(scores)
+
+    print(f"\n  ── Results for '{task_id}'")
+    print(f"     mean : {mean:.4f}")
+    print(f"     std  : {std:.4f}")
+    print(f"     best : {best:.4f}  worst: {worst:.4f}")
+
+    return {
+        "mean": round(mean, 4),
+        "std":  round(std, 4),
+        "best": round(best, 4),
+        "worst": round(worst, 4),
+        "runs": scores,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def main():
+    print("SQL Query Review — OpenEnv Baseline Inference")
+    print(f"Model  : {MODEL_NAME}")
+    print(f"API    : {API_BASE_URL}")
+    print(f"Env    : {ENV_URL}")
+    print(f"Tasks  : {len(TASKS)}")
+    print(f"Runs   : {RUNS_PER_TASK} per task")
+    print()
+
+    if not env_health():
+        print(f"✗ Environment not reachable at {ENV_URL}")
+        print("  Start server: uvicorn server.app:app --host 0.0.0.0 --port 7860")
+        sys.exit(1)
+
+    print("✓ Environment is healthy\n")
+
+    all_results = {}
+    start = time.time()
+
+    for task_id in TASKS:
+        all_results[task_id] = run_task(task_id)
+
+    elapsed = time.time() - start
+
+    # Summary table
+    print(f"\n{'='*60}")
+    print("BASELINE RESULTS")
+    print(f"{'='*60}")
+    print(f"  {'Task':<35} {'Mean':>6}  {'±Std':>6}  {'Best':>6}")
+    print(f"  {'-'*55}")
+
+    means = []
+    for task_id, r in all_results.items():
+        bar = "█" * int(r["mean"] * 20)
+        print(
+            f"  {task_id:<35} {r['mean']:>6.4f}  "
+            f"±{r['std']:>5.4f}  {r['best']:>6.4f}  {bar}"
+        )
+        means.append(r["mean"])
+
+    overall_mean = statistics.mean(means)
+    print(f"\n  Overall mean : {overall_mean:.4f}")
+    print(f"  Total time   : {elapsed:.1f}s")
+
+    # Machine-readable output for validators
+    output = {
+        "model": MODEL_NAME,
+        "tasks": all_results,
+        "overall_mean": round(overall_mean, 4),
+        "elapsed_seconds": round(elapsed, 1),
+    }
+    print("\nJSON:")
+    print(json.dumps(output, indent=2))
+
+
+if __name__ == "__main__":
+    main()
