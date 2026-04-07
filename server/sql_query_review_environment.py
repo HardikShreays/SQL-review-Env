@@ -216,6 +216,8 @@ TASK_IDS = [t["id"] for t in TASKS]
 
 _sessions: Dict[str, Dict[str, Any]] = {}
 _task_cycle_index: int = 0  # global cycle counter across all resets
+MIN_STRICT_SCORE = 0.0001
+MAX_STRICT_SCORE = 0.9999
 
 
 def _make_session(task: dict) -> Dict[str, Any]:
@@ -247,7 +249,8 @@ def _grade_easy_cartesian(issues_found, fix_sql, step_count) -> float:
                 or "c.customer_id = o.customer_id" in sql):
             score += 0.10
     if step_count <= 5: score += 0.20
-    return round(min(score, 1.0), 4)
+    score = min(score, 1.0)
+    return round(min(MAX_STRICT_SCORE, max(MIN_STRICT_SCORE, score)), 4)
 
 
 def _grade_medium_injection(issues_found, fix_sql, severity_critical, step_count) -> float:
@@ -260,7 +263,8 @@ def _grade_medium_injection(issues_found, fix_sql, severity_critical, step_count
         elif any(kw in fix_sql.lower() for kw in ["parameteriz", "prepared"]):
             score += 0.15
     if step_count <= 5: score += 0.20
-    return round(min(score, 1.0), 4)
+    score = min(score, 1.0)
+    return round(min(MAX_STRICT_SCORE, max(MIN_STRICT_SCORE, score)), 4)
 
 
 def _grade_hard_n_plus_one(issues_found, fix_sql, has_index_mention, step_count) -> float:
@@ -279,7 +283,8 @@ def _grade_hard_n_plus_one(issues_found, fix_sql, has_index_mention, step_count)
             score += 0.05
     if has_index_mention: score += 0.10
     if step_count <= 9:   score += 0.10
-    return round(min(score, 1.0), 4)
+    score = min(score, 1.0)
+    return round(min(MAX_STRICT_SCORE, max(MIN_STRICT_SCORE, score)), 4)
 
 
 def _grade_medium_null_check(issues_found, fix_sql, step_count) -> float:
@@ -292,7 +297,8 @@ def _grade_medium_null_check(issues_found, fix_sql, step_count) -> float:
         if "nulls last" in sql or "nulls first" in sql:     score += 0.05
         if "where" in sql or "filter" in sql:                score += 0.05
     if step_count <= 5:                                      score += 0.10  # was 0.20
-    return round(min(score, 1.0), 4)
+    score = min(score, 1.0)
+    return round(min(MAX_STRICT_SCORE, max(MIN_STRICT_SCORE, score)), 4)
 
 
 def _grade_easy_select_star(issues_found, fix_sql, step_count) -> float:
@@ -304,7 +310,8 @@ def _grade_easy_select_star(issues_found, fix_sql, step_count) -> float:
                    if kw in sql)
         score += hits * 0.10
     if step_count <= 5: score += 0.20
-    return round(min(score, 1.0), 4)
+    score = min(score, 1.0)
+    return round(min(MAX_STRICT_SCORE, max(MIN_STRICT_SCORE, score)), 4)
 
 
 GRADERS = {
