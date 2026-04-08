@@ -30,7 +30,7 @@ load_dotenv()
 
 API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
 MODEL_NAME   = os.getenv("MODEL_NAME", "llama-3.3-70b-versatile")
-HF_TOKEN     = os.getenv("HF_TOKEN")
+HF_TOKEN     = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
 ENV_URL      = os.getenv("ENV_URL", "https://hardikshreyas-sql-query-review.hf.space")
 BENCHMARK    = "sql_query_review"
 
