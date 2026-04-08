@@ -9,7 +9,7 @@ MANDATORY environment variables:
 STDOUT FORMAT (strictly followed — nothing else on stdout):
     [START] task=<task_name> env=<benchmark> model=<model_name>
     [STEP]  step=<n> action=<action_str> reward=<0.00> done=<true|false> error=<msg|null>
-    [END]   success=<true|false> steps=<n> rewards=<r1,r2,...,rn>
+    [END]   success=<true|false> steps=<n> score=<0.0000> rewards=<r1,r2,...,rn>
 """
 
 import json
@@ -45,15 +45,21 @@ TASKS = [
     "easy_select_star",
 ]
 
-RUNS_PER_TASK = 8
+RUNS_PER_TASK = 1
 SUCCESS_SCORE_THRESHOLD = 0.1
-TASK_ID = os.getenv("TASK_ID", "easy_cartesian_product")
 
 VALID_CATEGORIES = {
     "sql_injection", "missing_index", "n_plus_one",
     "incorrect_logic", "cartesian_product", "missing_null_check", "none"
 }
 VALID_SEVERITIES = {"critical", "high", "medium", "low"}
+MIN_STRICT_SCORE = 0.0001
+MAX_STRICT_SCORE = 0.9999
+
+
+def clamp_strict_score(value: float) -> float:
+    """Clamp scores to strict open interval (0,1)."""
+    return round(min(MAX_STRICT_SCORE, max(MIN_STRICT_SCORE, float(value))), 4)
 
 # ---------------------------------------------------------------------------
 # Structured stdout loggers — strictly match sample format
@@ -72,10 +78,10 @@ def log_step(step: int, action: str, reward: float, done: bool, error: Optional[
     )
 
 
-def log_end(success: bool, steps: int, rewards: List[float]) -> None:
+def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> None:
     rewards_str = ",".join(f"{r:.2f}" for r in rewards)
     print(
-        f"[END] success={str(success).lower()} steps={steps} rewards={rewards_str}",
+        f"[END] success={str(success).lower()} steps={steps} score={score:.4f} rewards={rewards_str}",
         flush=True,
     )
 
@@ -265,7 +271,7 @@ def run_episode(task_id: str) -> float:
 
             obs = step_result["observation"]
             done = step_result["done"]
-            reward = float(step_result.get("reward", 0.0))
+            reward = clamp_strict_score(step_result.get("reward", 0.0))
             error = obs.get("last_action_error") if isinstance(obs, dict) else None
 
             # [STEP] to stdout
@@ -283,10 +289,11 @@ def run_episode(task_id: str) -> float:
 
         if not episode_done and rewards:
             final_score = rewards[-1]
+        final_score = clamp_strict_score(final_score)
         success = bool(rewards) and (final_score >= SUCCESS_SCORE_THRESHOLD)
 
     finally:
-        log_end(success=success, steps=steps_taken, rewards=rewards)
+        log_end(success=success, steps=steps_taken, score=final_score, rewards=rewards)
 
     return final_score
 
@@ -308,8 +315,17 @@ def main():
 
     # hprint("✓ Environment is healthy\n")
 
-    # Emit exactly one START..END sequence for validator compatibility.
-    run_episode(TASK_ID)
+    if not env_health():
+        hprint(f"✗ Environment not reachable at {ENV_URL}")
+        sys.exit(1)
+
+    all_scores = {}
+    for task_id in TASKS:
+        score = run_episode(task_id)
+        all_scores[task_id] = score
+
+    overall = sum(all_scores.values()) / len(all_scores)
+    hprint(json.dumps({"model": MODEL_NAME, "scores": all_scores, "overall_mean": round(overall, 4)}, indent=2))
 
 
 if __name__ == "__main__":
