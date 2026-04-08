@@ -210,7 +210,7 @@ def run_episode(task_id: str) -> float:
     conversation = []
     rewards: List[float] = []
     steps_taken = 0
-    final_score = 0.0
+    final_score = MIN_STRICT_SCORE
     success = False
     episode_done = False
 
@@ -237,6 +237,7 @@ def run_episode(task_id: str) -> float:
                 )
             except Exception as e:
                 hprint(f"    ✗ LLM error: {e}")
+                final_score = MIN_STRICT_SCORE
                 break
 
             raw = response.choices[0].message.content or "{}"
@@ -246,6 +247,7 @@ def run_episode(task_id: str) -> float:
                 action = json.loads(raw)
             except json.JSONDecodeError as e:
                 hprint(f"    ✗ JSON parse error: {e}")
+                final_score = MIN_STRICT_SCORE
                 break
 
             # Sanitize
@@ -267,6 +269,7 @@ def run_episode(task_id: str) -> float:
                 step_result = env_step(action)
             except requests.HTTPError as e:
                 hprint(f"    ✗ Env error: {e}")
+                final_score = MIN_STRICT_SCORE
                 break
 
             obs = step_result["observation"]
