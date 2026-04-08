@@ -10,7 +10,7 @@ pinned: false
 
 # SQL Query Review Environment
 
-Last updated: 2026-04-07
+Last updated: 2026-04-08
 
 [![OpenEnv](https://img.shields.io/badge/OpenEnv-compliant-blue)](https://github.com/meta-pytorch/openenv)
 [![Hugging Face Space](https://img.shields.io/badge/HuggingFace-Space-yellow)](https://huggingface.co/spaces/hardikshreyas/sql_query_review)
@@ -53,10 +53,27 @@ uvicorn server.app:app --host 0.0.0.0 --port 7860
 export API_BASE_URL="https://api.groq.com/openai/v1"
 export MODEL_NAME="meta-llama/llama-4-scout-17b-16e-instruct"
 export HF_TOKEN="your_api_key"
+export TASK_ID="easy_cartesian_product"  # run one task per invocation
 python inference.py
 ```
 
-Expected structured logs include `[START]`, `[STEP]`, and `[END]` markers for evaluator parsing.
+Evaluator-safe stdout format (no extra stdout lines):
+
+```text
+[START] task=<task_name> env=sql_query_review model=<model_name>
+[STEP] step=<n> action=<action_str> reward=<0.00> done=<true|false> error=<msg|null>
+[END] success=<true|false> steps=<n> rewards=<r1,r2,...,rn>
+```
+
+Run all tasks by invoking `inference.py` separately:
+
+```bash
+TASK_ID=easy_cartesian_product python inference.py
+TASK_ID=medium_sql_injection python inference.py
+TASK_ID=hard_n_plus_one python inference.py
+TASK_ID=medium_missing_null_check python inference.py
+TASK_ID=easy_select_star python inference.py
+```
 
 ### Docker
 

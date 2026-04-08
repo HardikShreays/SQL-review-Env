@@ -47,6 +47,7 @@ TASKS = [
 
 RUNS_PER_TASK = 8
 SUCCESS_SCORE_THRESHOLD = 0.1
+TASK_ID = os.getenv("TASK_ID", "easy_cartesian_product")
 
 VALID_CATEGORIES = {
     "sql_injection", "missing_index", "n_plus_one",
@@ -71,10 +72,10 @@ def log_step(step: int, action: str, reward: float, done: bool, error: Optional[
     )
 
 
-def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> None:
+def log_end(success: bool, steps: int, rewards: List[float]) -> None:
     rewards_str = ",".join(f"{r:.2f}" for r in rewards)
     print(
-        f"[END] success={str(success).lower()} steps={steps} score={score:.4f} rewards={rewards_str}",
+        f"[END] success={str(success).lower()} steps={steps} rewards={rewards_str}",
         flush=True,
     )
 
@@ -285,7 +286,7 @@ def run_episode(task_id: str) -> float:
         success = bool(rewards) and (final_score >= SUCCESS_SCORE_THRESHOLD)
 
     finally:
-        log_end(success=success, steps=steps_taken, score=final_score, rewards=rewards)
+        log_end(success=success, steps=steps_taken, rewards=rewards)
 
     return final_score
 
@@ -307,23 +308,8 @@ def main():
 
     # hprint("✓ Environment is healthy\n")
 
-    start = time.time()
-    all_scores = {}
-
-    for task_id in TASKS:
-        # hprint(f"\n{'='*50}")
-        # hprint(f"Task: {task_id}")
-        # hprint(f"{'='*50}")
-        score = run_episode(task_id)
-        all_scores[task_id] = score
-        # hprint(f"  → Score: {score:.4f}")
-
-    elapsed = time.time() - start
-    overall = sum(all_scores.values()) / len(all_scores)
-
-    # hprint(f"\nOverall mean : {overall:.4f}")
-    # hprint(f"Total time   : {elapsed:.1f}s")
-    hprint(json.dumps({"model": MODEL_NAME, "scores": all_scores, "overall_mean": round(overall, 4)}, indent=2))
+    # Emit exactly one START..END sequence for validator compatibility.
+    run_episode(TASK_ID)
 
 
 if __name__ == "__main__":
